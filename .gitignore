@@ -1,0 +1,5 @@
+browser_profile/
+memory_profiles/
+config.json
+__pycache__/
+*.pyc
