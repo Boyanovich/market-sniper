@@ -34,9 +34,9 @@ DEFAULT_CONFIG = {
     "openrouter_api_key": "YOUR_OPENROUTER_API_KEY_HERE",
     "text_ai_model": "stepfun/step-3.5-flash:free",
     "vision_ai_model": "nvidia/nemotron-nano-12b-v2-vl:free",
-    "search_queries": ["metal detector", "nokta"],
-    "target_models": ["nokta", "simplex"],
-    "negative_words": ["sunpow","headphones"]
+    "search_queries": ["bici corsa"],
+    "positive_criteria": ["road bike", "good condition", "not older than 2015"],
+    "negative_criteria": ["rusty", "missing pedals", "broken", "kids bike"]
 }
 
 def load_config():
@@ -73,8 +73,8 @@ CFG = load_config()
 def get_memory_file():
     state_str = (
         f"sq:{sorted(CFG['search_queries'])}|"
-        f"tm:{sorted(CFG['target_models'])}|"
-        f"nw:{sorted(CFG['negative_words'])}"
+        f"pc:{sorted(CFG['positive_criteria'])}|"
+        f"nc:{sorted(CFG['negative_criteria'])}"
     )
     state_hash = hashlib.md5(state_str.encode()).hexdigest()[:12]
     return os.path.join(MEMORY_DIR, f"seen_{state_hash}.txt")
@@ -91,6 +91,9 @@ def save_processed_link(url):
 # =====================================================================
 # TELEGRAM BOT INTERFACE (CHATOPS)
 # =====================================================================
+# =====================================================================
+# TELEGRAM BOT INTERFACE (CHATOPS)
+# =====================================================================
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     if str(message.chat.id) != TELEGRAM_CHAT_ID: return
@@ -104,14 +107,15 @@ def send_welcome(message):
         "<b>[ FILTERS & SEARCH ]</b>\n"
         "💰 <code>/price [num]</code> - Max allowed price\n"
         "🌐 <code>/sites [subito/facebook/both]</code> - Set targets\n"
-        "🔍 <code>/add_search [word]</code> - Add site search query\n"
-        "❌ <code>/del_search [word]</code> - Remove search query\n\n"
+        "🔍 <code>/add_search [text]</code> - Add site search query\n"
+        "❌ <code>/del_search [text]</code> - Remove search query\n\n"
         
-        "<b>[ AI VALIDATION ]</b>\n"
-        "🎯 <code>/add_model [word]</code> - Add AI target model\n"
-        "❌ <code>/del_model [word]</code> - Remove AI target model\n"
-        "🛑 <code>/add_stop [word]</code> - Add ban word\n"
-        "❌ <code>/del_stop [word]</code> - Remove ban word\n\n"
+        "<b>[ AI SELECTION CRITERIA ]</b>\n"
+        "✅ <code>/add_criteria [text]</code> - Add required condition\n"
+        "➖ <code>/del_criteria [text]</code> - Remove condition\n"
+        "🛑 <code>/add_exclude [text]</code> - Add exclusion/defect\n"
+        "➖ <code>/del_exclude [text]</code> - Remove exclusion\n"
+        "🧹 <code>/clear_all</code> - Reset all searches & criteria\n\n"
         
         "<b>[ API & MODELS ]</b>\n"
         "🔑 <code>/api_key [key]</code> - Set OpenRouter API key\n"
@@ -135,6 +139,10 @@ def send_status(message):
     state = "🟢 RUNNING" if CFG.get('is_active') else "🔴 PAUSED"
     current_mem_hash = get_memory_file().split('_')[-1].replace('.txt', '')
     
+    sq = ', '.join(CFG['search_queries']) or "None"
+    pc = ', '.join(CFG['positive_criteria']) or "None"
+    nc = ', '.join(CFG['negative_criteria']) or "None"
+    
     text = (
         f"📊 <b>STATUS:</b> {state}\n\n"
         f"💰 <b>Max Price:</b> {CFG['max_price']} EUR\n"
@@ -142,10 +150,10 @@ def send_status(message):
         f"📁 <b>Memory Profile ID:</b> {current_mem_hash}\n\n"
         f"🔑 <b>API Key:</b> {CFG['openrouter_api_key'][:8]}...***\n"
         f"🧠 <b>Text AI:</b> {CFG['text_ai_model']}\n"
-        f"👁 <b>Vision AI:</b> {CFG['vision_ai_model']}\n\n"
-        f"🔍 <b>Site Search Queries:</b>\n{', '.join(CFG['search_queries'])}\n\n"
-        f"🎯 <b>AI Target Models:</b>\n{', '.join(CFG['target_models'])}\n\n"
-        f"🛑 <b>Stop Words:</b>\n{', '.join(CFG['negative_words'])}"
+        "👁 <b>Vision AI:</b> " + f"{CFG['vision_ai_model']}\n\n"
+        f"🔍 <b>Site Search Queries:</b>\n{sq}\n\n"
+        f"✅ <b>Required Criteria:</b>\n{pc}\n\n"
+        f"🛑 <b>Exclusions (What to avoid):</b>\n{nc}"
     )
     bot.reply_to(message, text, parse_mode="HTML")
 
@@ -156,7 +164,7 @@ def set_price(message):
         new_price = float(message.text.split(' ', 1)[1].replace(',', '.'))
         CFG['max_price'] = new_price
         save_config()
-        bot.reply_to(message, f"✅ Max price updated to: {new_price} EUR\n<i>(Note: Changing price does not reset memory, old items will be dynamically re-evaluated if price allows).</i>", parse_mode="HTML")
+        bot.reply_to(message, f"✅ Max price updated to: {new_price} EUR", parse_mode="HTML")
     except:
         bot.reply_to(message, "❌ Invalid format. Use: /price 150")
 
@@ -210,34 +218,59 @@ def set_vision_model(message):
 def modify_list(message, list_name, is_add=True):
     if str(message.chat.id) != TELEGRAM_CHAT_ID: return
     try:
-        word = message.text.split(' ', 1)[1].lower().strip()
+        phrase = message.text.split(' ', 1)[1].lower().strip()
         if is_add:
-            if word not in CFG[list_name]:
-                CFG[list_name].append(word)
+            if phrase not in CFG[list_name]:
+                CFG[list_name].append(phrase)
                 save_config()
-                bot.reply_to(message, f"✅ Added: {word}\n🔄 <i>Memory profile automatically switched.</i>", parse_mode="HTML")
-            else: bot.reply_to(message, f"⚠️ Already exists: {word}")
+                bot.reply_to(message, f"✅ Added: {phrase}\n🔄 <i>Memory profile automatically switched.</i>", parse_mode="HTML")
+            else: bot.reply_to(message, f"⚠️ Already exists: {phrase}")
         else:
-            if word in CFG[list_name]:
-                CFG[list_name].remove(word)
+            if phrase in CFG[list_name]:
+                CFG[list_name].remove(phrase)
                 save_config()
-                bot.reply_to(message, f"🗑 Removed: {word}\n🔄 <i>Memory profile automatically switched.</i>", parse_mode="HTML")
-            else: bot.reply_to(message, f"⚠️ Not found: {word}")
+                bot.reply_to(message, f"🗑 Removed: {phrase}\n🔄 <i>Memory profile automatically switched.</i>", parse_mode="HTML")
+            else: bot.reply_to(message, f"⚠️ Not found: {phrase}")
     except:
-        bot.reply_to(message, "❌ Error. Please provide a word.")
+        bot.reply_to(message, "❌ Error. Please provide text after the command.")
 
 @bot.message_handler(commands=['add_search'])
 def add_sq(m): modify_list(m, 'search_queries', True)
 @bot.message_handler(commands=['del_search'])
 def del_sq(m): modify_list(m, 'search_queries', False)
-@bot.message_handler(commands=['add_model'])
-def add_m(m): modify_list(m, 'target_models', True)
-@bot.message_handler(commands=['del_model'])
-def del_m(m): modify_list(m, 'target_models', False)
-@bot.message_handler(commands=['add_stop'])
-def add_st(m): modify_list(m, 'negative_words', True)
-@bot.message_handler(commands=['del_stop'])
-def del_st(m): modify_list(m, 'negative_words', False)
+
+@bot.message_handler(commands=['add_criteria'])
+def add_pc(m): modify_list(m, 'positive_criteria', True)
+@bot.message_handler(commands=['del_criteria'])
+def del_pc(m): modify_list(m, 'positive_criteria', False)
+
+@bot.message_handler(commands=['add_exclude'])
+def add_nc(m): modify_list(m, 'negative_criteria', True)
+@bot.message_handler(commands=['del_exclude'])
+def del_nc(m): modify_list(m, 'negative_criteria', False)
+
+@bot.message_handler(commands=['clear_all', 'clear_search', 'clear_criteria', 'clear_exclude'])
+def clear_filters(message):
+    if str(message.chat.id) != TELEGRAM_CHAT_ID: return
+    cmd = message.text.split()[0].lower()
+    
+    if cmd == '/clear_all':
+        CFG['search_queries'] = []
+        CFG['positive_criteria'] = []
+        CFG['negative_criteria'] = []
+        msg = "🧹 <b>All searches, criteria, and exclusions have been completely reset!</b>"
+    elif cmd == '/clear_search':
+        CFG['search_queries'] = []
+        msg = "🧹 <b>Search queries cleared!</b>"
+    elif cmd == '/clear_criteria':
+        CFG['positive_criteria'] = []
+        msg = "🧹 <b>Required criteria cleared!</b>"
+    elif cmd == '/clear_exclude':
+        CFG['negative_criteria'] = []
+        msg = "🧹 <b>Exclusions cleared!</b>"
+        
+    save_config()
+    bot.reply_to(message, f"{msg}\n🔄 <i>Memory profile automatically switched.</i>", parse_mode="HTML")
 
 def start_telegram_bot():
     print("[SYSTEM] Telegram ChatOps Interface running...")
@@ -277,73 +310,106 @@ def extract_exact_price(text_content):
 # =====================================================================
 # AI EVALUATION MODULES
 # =====================================================================
-def evaluate_with_text_ai(raw_text, extracted_price):
+# =====================================================================
+# AI EVALUATION MODULES
+# =====================================================================
+import base64
+
+def image_url_to_base64(img_url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0"}
+        r = requests.get(img_url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            mime = r.headers.get("Content-Type", "image/jpeg")
+            b64 = base64.b64encode(r.content).decode("utf-8")
+            return f"data:{mime};base64,{b64}"
+    except:
+        pass
+    return img_url
+
+def call_openrouter_api(model_name, messages):
     api_url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {CFG['openrouter_api_key']}", "Content-Type": "application/json"}
+    data = {"model": model_name, "messages": messages}
     
-    models_str = ", ".join(CFG["target_models"])
+    response = requests.post(api_url, headers=headers, json=data, timeout=45)
+    # Если модель выдала ошибку 400/404/429, автоматически переключаемся на openrouter/free
+    if response.status_code in [400, 404, 429] and model_name != "openrouter/free":
+        print(f"  └── [AI FALLBACK] Status {response.status_code} on '{model_name}'. Switching to 'openrouter/free'...")
+        data["model"] = "openrouter/free"
+        response = requests.post(api_url, headers=headers, json=data, timeout=45)
+        
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+def evaluate_with_text_ai(raw_text, extracted_price):
+    categories_str = ", ".join(CFG["search_queries"]) or "General item"
+    pos_str = ", ".join(CFG["positive_criteria"]) or "Any good condition item"
+    neg_str = ", ".join(CFG["negative_criteria"]) or "None"
     max_price = CFG["max_price"]
     
     prompt = f"""
     You are a strict appraiser evaluating a raw web page scrape.
-    Target Items: Professional metal detectors from these lines: {models_str}
+    Target Item Category: {categories_str}
+    Required Criteria (MUST match): {pos_str}
+    Exclusion Criteria (MUST NOT have): {neg_str}
     Maximum Allowed Price: {max_price} EUR.
     Listing Text: "{raw_text}"
     
     CRITICAL RULES:
-    1. If the text clearly identifies a target model from our list as the main item being sold, output "MATCH: YES".
-    2. If the text is long (over 30 words) but DOES NOT mention any of our target brands/models, output "MATCH: NO".
-    3. You are FORBIDDEN from outputting "MATCH: NEED_VISION" unless the text is extremely short (under 30 words) AND lacks a brand name. 
-    4. If it's an accessory (only coil/headphones), output "MATCH: NO".
+    1. If the text clearly violates any Exclusion Criteria, sells only a minor accessory/spare part, or is a "wanted to buy" ("cerco") ad, output "MATCH: NO".
+    2. If the text clearly fails to meet the Required Criteria (for example, wrong year, wrong type), output "MATCH: NO".
+    3. If the text lacks details to verify the Required Criteria OR if visual inspection of photos is needed to check physical condition / Exclusion Criteria (like rust, missing parts, or visual type), output "MATCH: NEED_VISION".
+    4. If the text alone completely confirms all Required Criteria and rules out all Exclusion Criteria, output "MATCH: YES".
     
     Respond EXACTLY in this format:
     MATCH: [YES, NO, or NEED_VISION]
     REASON: 1 short sentence explaining why.
     """
     
-    data = {"model": CFG["text_ai_model"], "messages": [{"role": "user", "content": prompt}]}
+    messages = [{"role": "user", "content": prompt}]
     try:
-        response = requests.post(api_url, headers=headers, json=data)
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        return call_openrouter_api(CFG["text_ai_model"], messages)
     except requests.exceptions.HTTPError as err:
-        error_details = err.response.text if err.response else str(err)
-        return f"MATCH: NEED_VISION\nREASON: API HTTP Error: {error_details}"
+        error_details = err.response.text if err.response is not None else str(err)
+        return f"MATCH: NEED_VISION\nREASON: API HTTP Error: {error_details[:120]}"
     except Exception as e:
-        return f"MATCH: NEED_VISION\nREASON: API Connection Failed: {str(e)}"
+        return f"MATCH: NEED_VISION\nREASON: API Connection Failed: {str(e)[:120]}"
 
 def evaluate_with_vision_ai(raw_text, image_urls):
-    api_url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {CFG['openrouter_api_key']}", "Content-Type": "application/json"}
-    models_str = ", ".join(CFG["target_models"])
+    categories_str = ", ".join(CFG["search_queries"]) or "General item"
+    pos_str = ", ".join(CFG["positive_criteria"]) or "Any good condition item"
+    neg_str = ", ".join(CFG["negative_criteria"]) or "None"
     
     prompt = f"""
-    You are an expert appraiser. Text was vague, rely on images.
-    Target Items: {models_str}
+    You are an expert visual appraiser inspecting product photos and text.
+    Target Item Category: {categories_str}
+    Required Criteria (MUST match): {pos_str}
+    Exclusion Criteria (MUST NOT have): {neg_str}
     Listing Text: "{raw_text}"
     
-    1. If images show ONLY accessories, respond MATCH: NO.
-    2. If you see a metal detector from our Target Items list, respond MATCH: YES.
-    3. If you see unbranded junk, respond MATCH: NO.
+    1. Inspect the photos carefully. If the item shows any Exclusion Criteria (e.g., visual defects, rust, missing parts, wrong style) or shows ONLY spare parts/boxes, respond MATCH: NO.
+    2. If the item in the photos and text matches the Required Criteria, respond MATCH: YES.
+    3. Otherwise, respond MATCH: NO.
     
     Respond EXACTLY:
     MATCH: YES or NO
-    REASON: 1 short sentence.
+    REASON: 1 short sentence describing what you see and why it matches or fails.
     """
 
     content_array = [{"type": "text", "text": prompt}]
-    for img in image_urls: content_array.append({"type": "image_url", "image_url": {"url": img}})
+    for img in image_urls[:2]:
+        b64_img = image_url_to_base64(img)
+        content_array.append({"type": "image_url", "image_url": {"url": b64_img}})
 
-    data = {"model": CFG["vision_ai_model"], "messages": [{"role": "user", "content": content_array}]}
+    messages = [{"role": "user", "content": content_array}]
     try:
-        response = requests.post(api_url, headers=headers, json=data)
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        return call_openrouter_api(CFG["vision_ai_model"], messages)
     except requests.exceptions.HTTPError as err:
-        error_details = err.response.text if err.response else str(err)
-        return f"MATCH: NO\nREASON: API HTTP Error: {error_details}"
+        error_details = err.response.text if err.response is not None else str(err)
+        return f"MATCH: NO\nREASON: API HTTP Error: {error_details[:120]}"
     except Exception as e:
-        return f"MATCH: NO\nREASON: API Connection Failed: {str(e)}"
+        return f"MATCH: NO\nREASON: API Connection Failed: {str(e)[:120]}"
 
 def notify_success(url, analysis_reason, source_type):
     clean_reason = analysis_reason.replace("*", "").replace("MATCH: YES", "").replace("MATCH: NEED_VISION", "").strip()
@@ -354,7 +420,6 @@ def notify_success(url, analysis_reason, source_type):
         f"🔗 <a href='{url}'>View Listing</a>"
     )
     bot.send_message(TELEGRAM_CHAT_ID, message, parse_mode="HTML")
-
 # =====================================================================
 # HEADLESS SCRAPER ENGINE
 # =====================================================================
@@ -492,12 +557,6 @@ if __name__ == "__main__":
                     
                     if price > current_max:
                         print(f"  └── [REJECTED] Price {price} > {current_max}")
-                        continue
-                        
-                    has_negative = any(word in text_lower for word in CFG["negative_words"])
-                    if has_negative:
-                        print(f"  └── [REJECTED] Found Stop Word")
-                        save_processed_link(item_url)
                         continue
 
                     text_ai_verdict = evaluate_with_text_ai(raw_text, price)
