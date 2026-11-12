@@ -1,5 +1,6 @@
 browser_profile/
 memory_profiles/
 config.json
+items_cache.json
 __pycache__/
 *.pyc
